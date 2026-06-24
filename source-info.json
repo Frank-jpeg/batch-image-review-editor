@@ -1,0 +1,7 @@
+{
+  "project_name": "抠图查图处理",
+  "source_path": "/Users/mini/Desktop/codex项目/koutu_chatu_mac_app",
+  "main_file": "/Users/mini/Desktop/codex项目/koutu_chatu_mac_app/src/抠图查图处理_mac.py",
+  "spec_file": "/Users/mini/Desktop/codex项目/koutu_chatu_mac_app/build/spec/抠图查图处理.spec",
+  "build_command": "cd /Users/mini/Desktop/codex项目/koutu_chatu_mac_app/build/spec && PYINSTALLER_CONFIG_DIR=/Users/mini/Desktop/codex项目/koutu_chatu_mac_app/build/pyinstaller-cache /Users/mini/Desktop/codex项目/koutu_chatu_mac_app/mamba_env/bin/pyinstaller --noconfirm --clean 抠图查图处理.spec"
+}
