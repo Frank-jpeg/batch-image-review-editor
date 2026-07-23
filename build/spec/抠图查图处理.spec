@@ -1,11 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(SPECPATH).resolve().parents[1]
+ENTRY_POINT = PROJECT_ROOT / 'src' / '抠图查图处理_mac.py'
+SOURCE_INFO = PROJECT_ROOT / 'source-info.json'
+ICON_PATH = PROJECT_ROOT / 'assets' / '查图.icns'
 
 a = Analysis(
-    ['../../src/抠图查图处理_mac.py'],
+    [str(ENTRY_POINT)],
     pathex=[],
     binaries=[],
-    datas=[('../../source-info.json', '.')],
+    datas=[(str(SOURCE_INFO), '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -32,7 +39,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['/Users/mini/Desktop/codex项目/koutu_chatu_mac_app/assets/查图.icns'],
+    icon=[str(ICON_PATH)],
 )
 coll = COLLECT(
     exe,
@@ -46,6 +53,6 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name='抠图查图处理.app',
-    icon='/Users/mini/Desktop/codex项目/koutu_chatu_mac_app/assets/查图.icns',
+    icon=str(ICON_PATH),
     bundle_identifier='com.local.koutu-chatu',
 )
