@@ -76,9 +76,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          for asset in -macOS-arm64.app.zip -macOS-arm64.dmg -Windows-x64.exe batch-image-review-editor-macos-arm64.app.zip batch-image-review-editor-macos-arm64.dmg batch-image-review-editor-windows-x64.exe; do
-            gh release delete-asset latest --yes -- "$asset" 2>/dev/null || true
-          done
+          release_id="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/latest" --jq '.id' 2>/dev/null || true)"
+          if [ -n "$release_id" ]; then
+            gh api "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" --paginate --jq '.[] | select(.name | startswith("-")) | .id' | while read -r asset_id; do
+              [ -z "$asset_id" ] || gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+            done
+          fi
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
