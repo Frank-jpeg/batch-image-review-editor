@@ -176,12 +176,66 @@ def apply_dark_theme(widget: tk.Misc) -> None:
         apply_dark_theme(child)
 
 
+class MacDockWindowRestorer:
+    """Restore a minimized Tk window when macOS reopens this app from the Dock."""
+
+    def __init__(self, root: tk.Tk) -> None:
+        self.root = root
+        self.command_name = f"restore_dock_window_{id(self)}"
+        self.closed = False
+
+        if sys.platform != "darwin":
+            return
+
+        try:
+            self.root.createcommand(self.command_name, self.restore_if_minimized)
+            self.root.tk.eval("namespace eval ::tk::mac {}")
+            self.root.tk.call("proc", "::tk::mac::ReopenApplication", "", self.command_name)
+            self.root.bind("<Destroy>", self.on_root_destroy, add="+")
+        except Exception:
+            # Do not prevent the image-processing UI from opening if this Tk/macOS
+            # callback is unavailable in a development environment.
+            self.close()
+
+    def restore_if_minimized(self) -> str:
+        if self.closed:
+            return ""
+        try:
+            self.root.deiconify()
+            self.root.lift()
+            self.root.focus_force()
+        except tk.TclError:
+            self.close()
+        return ""
+
+    def on_root_destroy(self, event: tk.Event) -> None:
+        if event.widget == self.root:
+            self.close()
+
+    def close(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        if sys.platform == "darwin":
+            try:
+                self.root.tk.call("proc", "::tk::mac::ReopenApplication", "", "")
+            except tk.TclError:
+                pass
+            try:
+                self.root.deletecommand(self.command_name)
+            except tk.TclError:
+                pass
+
+
 @dataclass
 class UndoSnapshot:
     path: Path
     data: bytes
     index: int
     action: str
+    operation: str = "edit"
+    restore_move_from: Path | None = None
+    restore_move_to: Path | None = None
 
 
 @dataclass
@@ -564,7 +618,8 @@ def make_near_black_mask(
     return ImageChops.multiply(ImageChops.multiply(channel_mask(r), channel_mask(g)), channel_mask(b))
 
 
-def whiten_image_preserve_alpha(path: Path) -> None:
+def fill_image_preserve_alpha(path: Path, color: tuple[int, int, int]) -> None:
+    red, green, blue = (max(0, min(int(channel), 255)) for channel in color)
     with Image.open(path) as src:
         save_format = detect_save_format(path, src.format)
         has_alpha = "A" in src.getbands() or "transparency" in src.info
@@ -572,16 +627,37 @@ def whiten_image_preserve_alpha(path: Path) -> None:
         if has_alpha:
             rgba = src.convert("RGBA")
             _, _, _, a = rgba.split()
-            white = Image.new("RGBA", rgba.size, (255, 255, 255, 0))
-            white.putalpha(a)
-            output = white if save_format != "JPEG" else white.convert("RGB")
+            filled = Image.new("RGBA", rgba.size, (red, green, blue, 0))
+            filled.putalpha(a)
+            output = filled if save_format != "JPEG" else filled.convert("RGB")
         else:
-            output = Image.new("RGB", src.size, (255, 255, 255))
+            output = Image.new("RGB", src.size, (red, green, blue))
 
     save_image_atomic(output, path, save_format)
 
 
-def whiten_selection_preserve_alpha(path: Path, selection_mask: Image.Image) -> None:
+def whiten_image_preserve_alpha(path: Path) -> None:
+    fill_image_preserve_alpha(path, (255, 255, 255))
+
+
+def sample_image_rgb(path: Path, point: tuple[int, int]) -> tuple[int, int, int]:
+    with Image.open(path) as src:
+        rgba = src.convert("RGBA")
+        x = max(0, min(int(point[0]), rgba.width - 1))
+        y = max(0, min(int(point[1]), rgba.height - 1))
+        red, green, blue, alpha = rgba.getpixel((x, y))
+
+    if alpha == 0:
+        raise ValueError("点击位置是透明区域，没有可取的颜色。请点击可见区域。")
+    return red, green, blue
+
+
+def fill_selection_preserve_alpha(
+    path: Path,
+    selection_mask: Image.Image,
+    color: tuple[int, int, int],
+) -> None:
+    red, green, blue = (max(0, min(int(channel), 255)) for channel in color)
     with Image.open(path) as src:
         save_format = detect_save_format(path, src.format)
         has_alpha = "A" in src.getbands() or "transparency" in src.info
@@ -594,16 +670,20 @@ def whiten_selection_preserve_alpha(path: Path, selection_mask: Image.Image) -> 
             alpha = rgba.getchannel("A")
             visible_mask = alpha.point(lambda value: 255 if value > 0 else 0)
             final_mask = ImageChops.multiply(mask, visible_mask)
-            white = Image.new("RGBA", rgba.size, (255, 255, 255, 0))
-            white.putalpha(alpha)
-            output = Image.composite(white, rgba, final_mask)
+            filled = Image.new("RGBA", rgba.size, (red, green, blue, 0))
+            filled.putalpha(alpha)
+            output = Image.composite(filled, rgba, final_mask)
             output = output if save_format != "JPEG" else output.convert("RGB")
         else:
             rgb = src.convert("RGB")
-            white = Image.new("RGB", rgb.size, (255, 255, 255))
-            output = Image.composite(white, rgb, mask)
+            filled = Image.new("RGB", rgb.size, (red, green, blue))
+            output = Image.composite(filled, rgb, mask)
 
     save_image_atomic(output, path, save_format)
+
+
+def whiten_selection_preserve_alpha(path: Path, selection_mask: Image.Image) -> None:
+    fill_selection_preserve_alpha(path, selection_mask, (255, 255, 255))
 
 
 def dilate_mask(mask: Image.Image, radius: int) -> Image.Image:
@@ -761,6 +841,7 @@ class ReviewApp:
         self.root.title(WINDOW_TITLE)
         self.root.geometry("1280x920")
         self.root.minsize(900, 700)
+        self.dock_window_restorer = MacDockWindowRestorer(self.root)
         install_dark_theme(self.root)
 
         self.header_var = tk.StringVar()
@@ -869,8 +950,8 @@ class ReviewApp:
 
         tk.Button(
             jump_controls,
-            text="仅删除预览 X",
-            width=13,
+            text="仅删除预览 X / ↓",
+            width=16,
             command=self.delete_preview_only,
             font=(UI_FONT, 11),
             bg="#8b5a2b",
@@ -985,11 +1066,21 @@ class ReviewApp:
 
         tk.Button(
             edit_controls,
-            text="转纯白 W",
-            width=11,
+            text="转纯白 W / ↑",
+            width=14,
             command=self.whiten_current,
             font=(UI_FONT, 11),
             bg="#3a8f3a",
+            fg="white",
+        ).pack(side="left", padx=(0, 6))
+
+        tk.Button(
+            edit_controls,
+            text="吸管填色 C",
+            width=12,
+            command=lambda: self.set_selection_mode("color_pick"),
+            font=(UI_FONT, 11),
+            bg="#a45f24",
             fg="white",
         ).pack(side="left", padx=(0, 6))
 
@@ -1078,6 +1169,9 @@ class ReviewApp:
         self.root.bind("<Key-I>", lambda event: self.invert_current())
         self.root.bind("<Key-w>", lambda event: self.whiten_current())
         self.root.bind("<Key-W>", lambda event: self.whiten_current())
+        self.root.bind("<Up>", lambda event: self.whiten_current())
+        self.root.bind("<Key-c>", lambda event: self.set_selection_mode("color_pick"))
+        self.root.bind("<Key-C>", lambda event: self.set_selection_mode("color_pick"))
         self.root.bind("<Key-k>", lambda event: self.black_to_white_current())
         self.root.bind("<Key-K>", lambda event: self.black_to_white_current())
         self.root.bind("<Key-b>", lambda event: self.bolden_current(BOLDEN_SIZE_1))
@@ -1096,6 +1190,7 @@ class ReviewApp:
         self.root.bind("<Key-D>", lambda event: self.reject_current())
         self.root.bind("<Key-x>", lambda event: self.delete_preview_only())
         self.root.bind("<Key-X>", lambda event: self.delete_preview_only())
+        self.root.bind("<Down>", lambda event: self.delete_preview_only())
         self.root.bind("<Escape>", self.exit_fullscreen)
         self.root.bind("<Command-q>", self.quit_app)
         self.root.bind("<Command-Q>", self.quit_app)
@@ -1184,19 +1279,34 @@ class ReviewApp:
         self.eraser_button_var.set(self.eraser_button_text())
 
     def set_selection_mode(self, mode: str) -> None:
-        if mode not in {"rect", "free", "erase"}:
+        if mode not in {"rect", "free", "erase", "color_pick"}:
             return
+        if mode == "color_pick" and self.selection_mode == "color_pick":
+            self.selection_mode = None
+            configure_safe(self.image_canvas, cursor="")
+            self.status_notice = "已取消吸管填色。"
+            self.refresh()
+            return
+
         self.selection_mode = mode
+        configure_safe(self.image_canvas, cursor="crosshair" if mode == "color_pick" else "")
         if mode == "rect":
             self.status_notice = "已切到矩形选区：在预览图上按住鼠标拖出矩形。"
         elif mode == "free":
             self.status_notice = "已切到自由选区：按住鼠标沿区域画一圈，松开后自动闭合。"
-        else:
+        elif mode == "erase":
             self.reset_selection_state()
             self.image_canvas.delete("selection")
             self.image_canvas.delete("selection_live")
             self.image_canvas.delete("eraser_live")
             self.status_notice = f"已切到橡皮擦：按住鼠标拖动擦除，笔刷 {self.eraser_size}px，[/] 调大小。"
+        else:
+            self.image_canvas.delete("selection_live")
+            self.image_canvas.delete("eraser_live")
+            if self.selection_mask is None:
+                self.status_notice = "吸管已开启：点击可见颜色，整张图会填充该颜色并保留透明度。"
+            else:
+                self.status_notice = "吸管已开启：点击可见颜色，只填充当前选区并保留透明度。"
         self.refresh()
 
     def clear_selection(self) -> None:
@@ -1440,6 +1550,8 @@ class ReviewApp:
         return "break"
 
     def on_canvas_press(self, event: tk.Event) -> str | None:
+        if self.selection_mode == "color_pick":
+            return self.fill_from_sampled_color(event.x, event.y)
         if self.selection_mode == "erase":
             return self.on_eraser_press(event)
         if self.selection_mode is None or self.current_image() is None:
@@ -1472,6 +1584,8 @@ class ReviewApp:
         return "break"
 
     def on_canvas_drag(self, event: tk.Event) -> str | None:
+        if self.selection_mode == "color_pick":
+            return "break"
         if self.selection_mode == "erase":
             return self.on_eraser_drag(event)
         if self.selection_mode is None or self.drag_start_canvas is None:
@@ -1491,6 +1605,8 @@ class ReviewApp:
         return "break"
 
     def on_canvas_release(self, event: tk.Event) -> str | None:
+        if self.selection_mode == "color_pick":
+            return "break"
         if self.selection_mode == "erase":
             return self.on_eraser_release(event)
         if self.selection_mode is None or self.drag_start_canvas is None:
@@ -1518,17 +1634,74 @@ class ReviewApp:
             return "break"
 
         self.selection_mask = mask
-        self.status_notice = "已创建选区，可点击“选区转纯白”。"
+        self.status_notice = "已创建选区，可点击“选区转纯白”或使用“吸管填色 C”。"
         self.refresh()
         return "break"
 
-    def push_undo(self, path: Path, action: str) -> None:
-        self.undo_stack.append(UndoSnapshot(path=path, data=path.read_bytes(), index=self.index, action=action))
+    def fill_from_sampled_color(self, canvas_x: int, canvas_y: int) -> str:
+        current = self.current_image()
+        if current is None:
+            return "break"
+
+        point = self.canvas_to_image_point_if_inside(canvas_x, canvas_y)
+        if point is None:
+            self.status_notice = "请点击图片内部的可见颜色。"
+            self.refresh()
+            return "break"
+
+        try:
+            color = sample_image_rgb(current, point)
+        except Exception as exc:
+            self.status_notice = str(exc)
+            self.refresh()
+            return "break"
+
+        color_hex = f"#{color[0]:02X}{color[1]:02X}{color[2]:02X}"
+        selection_mask = self.selection_mask.copy() if self.selection_mask is not None else None
+        self.selection_mode = None
+        configure_safe(self.image_canvas, cursor="")
+        if selection_mask is None:
+            action = f"吸管填色 {color_hex}"
+            processor = lambda path: fill_image_preserve_alpha(path, color)
+            success_notice = f"已用吸管颜色 {color_hex} 填充整图：{current.name}"
+        else:
+            action = f"吸管填充选区 {color_hex}"
+            processor = lambda path: fill_selection_preserve_alpha(path, selection_mask, color)
+            success_notice = f"已用吸管颜色 {color_hex} 填充选区：{current.name}"
+
+        self.apply_current_edit(
+            action,
+            "吸管填色失败",
+            processor,
+            success_notice,
+        )
+        return "break"
+
+    def push_undo(
+        self,
+        path: Path,
+        action: str,
+        operation: str = "edit",
+        restore_move_from: Path | None = None,
+        restore_move_to: Path | None = None,
+    ) -> UndoSnapshot:
+        snapshot = UndoSnapshot(
+            path=path,
+            data=path.read_bytes(),
+            index=self.index,
+            action=action,
+            operation=operation,
+            restore_move_from=restore_move_from,
+            restore_move_to=restore_move_to,
+        )
+        self.undo_stack.append(snapshot)
         if len(self.undo_stack) > MAX_UNDO_STEPS:
             self.undo_stack.pop(0)
+        return snapshot
 
-    def forget_undo_for_path(self, path: Path) -> None:
-        self.undo_stack = [snapshot for snapshot in self.undo_stack if snapshot.path != path]
+    def discard_undo(self, snapshot: UndoSnapshot) -> None:
+        if self.undo_stack and self.undo_stack[-1] is snapshot:
+            self.undo_stack.pop()
 
     def apply_current_edit(
         self,
@@ -1542,7 +1715,7 @@ class ReviewApp:
             return
 
         try:
-            self.push_undo(current, action)
+            snapshot = self.push_undo(current, action)
         except Exception as exc:
             messagebox.showerror("无法创建撤销记录", f"未修改图片。\n\n{exc}")
             return
@@ -1550,7 +1723,7 @@ class ReviewApp:
         try:
             processor(current)
         except Exception as exc:
-            self.undo_stack.pop()
+            self.discard_undo(snapshot)
             messagebox.showerror(error_title, str(exc))
             return
 
@@ -1559,21 +1732,54 @@ class ReviewApp:
 
     def undo_last(self) -> None:
         if not self.undo_stack:
-            self.status_notice = "没有可撤销的图片修改。"
+            self.status_notice = "没有可撤销的操作。"
             self.refresh()
             return
 
-        snapshot = self.undo_stack.pop()
+        snapshot = self.undo_stack[-1]
+        is_delete = snapshot.operation in {"delete_preview", "reject"}
+
+        if is_delete and snapshot.path.exists():
+            messagebox.showerror(
+                "撤销失败",
+                f"原位置已经存在同名文件，为避免覆盖，未执行恢复：\n{snapshot.path}",
+            )
+            return
+
+        move_from = snapshot.restore_move_from
+        move_to = snapshot.restore_move_to
+        if move_from is not None or move_to is not None:
+            if move_from is None or move_to is None:
+                messagebox.showerror("撤销失败", "原图恢复记录不完整，未执行恢复。")
+                return
+            if not move_from.exists():
+                messagebox.showerror("撤销失败", f"回退目录中的原图不存在：\n{move_from}")
+                return
+            if move_to.exists():
+                messagebox.showerror(
+                    "撤销失败",
+                    f"原图位置已经存在同名文件，为避免覆盖，未执行恢复：\n{move_to}",
+                )
+                return
+
         try:
             restore_bytes_atomic(snapshot.path, snapshot.data)
+            if move_from is not None and move_to is not None:
+                shutil.move(str(move_from), str(move_to))
         except Exception as exc:
+            if is_delete and snapshot.path.exists():
+                try:
+                    snapshot.path.unlink()
+                except Exception:
+                    pass
             messagebox.showerror("撤销失败", str(exc))
             return
 
+        self.undo_stack.pop()
         if snapshot.path in self.images:
             self.index = self.images.index(snapshot.path)
         elif snapshot.path.exists() and snapshot.path.suffix.lower() in SUPPORTED_EXTS:
-            insert_at = min(snapshot.index, len(self.images))
+            insert_at = max(0, min(snapshot.index, len(self.images)))
             self.images.insert(insert_at, snapshot.path)
             self.index = insert_at
 
@@ -1606,7 +1812,7 @@ class ReviewApp:
         self.update_work_dir_label()
         self.header_var.set(f"[{self.index + 1}/{len(self.images)}] {current.name}")
         base_text = (
-            f"回退目录：{self.retry_dir}    空格/回车：下一张    P：PS打开    F5：刷新    R/F：矩形/自由选区    E：橡皮擦    [/]：调笔刷    G：跳转    Ctrl+Z/⌘Z/U：撤销    Esc：退全屏    ⌘Q：退出"
+            f"回退目录：{self.retry_dir}    空格/回车：下一张    P：PS打开    F5：刷新    R/F：矩形/自由选区    E：橡皮擦    C：吸管填色    [/]：调笔刷    G：跳转    Ctrl+Z/⌘Z/U：撤销    Esc：退全屏    ⌘Q：退出"
         )
         if self.status_notice:
             self.status_var.set(f"{self.status_notice}\n{base_text}")
@@ -1827,15 +2033,21 @@ class ReviewApp:
             return
 
         try:
+            snapshot = self.push_undo(current, "仅删除预览", operation="delete_preview")
+        except Exception as exc:
+            messagebox.showerror("无法创建撤销记录", f"未删除图片。\n\n{exc}")
+            return
+
+        try:
             send_to_recycle_bin(current)
         except Exception as exc:
+            self.discard_undo(snapshot)
             messagebox.showerror("删除失败", str(exc))
             return
 
-        self.forget_undo_for_path(current)
         removed_name = current.name
         self.remove_current_from_queue()
-        self.status_notice = f"仅删除了预览图：{removed_name}"
+        self.status_notice = f"仅删除了预览图：{removed_name}。按 Command+Z、Ctrl+Z 或 U 可恢复。"
         self.refresh()
 
     def reject_current(self) -> None:
@@ -1855,10 +2067,24 @@ class ReviewApp:
             )
             return
 
+        if original.exists():
+            moved_to = unique_path(self.retry_dir / current.name)
+
         try:
-            if original.exists():
+            snapshot = self.push_undo(
+                current,
+                "删除预览并回退原图",
+                operation="reject",
+                restore_move_from=moved_to,
+                restore_move_to=original_target if moved_to is not None else None,
+            )
+        except Exception as exc:
+            messagebox.showerror("无法创建撤销记录", f"未执行删除。\n\n{exc}")
+            return
+
+        try:
+            if moved_to is not None:
                 self.retry_dir.mkdir(parents=True, exist_ok=True)
-                moved_to = unique_path(self.retry_dir / current.name)
                 shutil.move(str(original), str(moved_to))
 
             send_to_recycle_bin(current)
@@ -1868,17 +2094,22 @@ class ReviewApp:
                     shutil.move(str(moved_to), str(original_target))
                 except Exception:
                     pass
+            self.discard_undo(snapshot)
             messagebox.showerror("操作失败", str(exc))
             return
 
-        self.forget_undo_for_path(current)
         removed_name = current.name
         self.remove_current_from_queue()
 
         if moved_to:
-            self.status_notice = f"已删除预览图，并把原图移到：{moved_to}"
+            self.status_notice = (
+                f"已删除预览图，并把原图移到：{moved_to}。按 Command+Z、Ctrl+Z 或 U 可恢复。"
+            )
         else:
-            self.status_notice = f"预览图已删除，原图之前已经在回退目录里：{self.retry_dir / removed_name}"
+            self.status_notice = (
+                f"预览图已删除，原图之前已经在回退目录里：{self.retry_dir / removed_name}。"
+                "按 Command+Z、Ctrl+Z 或 U 可恢复预览图。"
+            )
 
         self.refresh()
 
@@ -1899,6 +2130,7 @@ class LauncherApp:
         self.root.title(f"{WINDOW_TITLE} - 首页")
         self.root.geometry("920x640")
         self.root.minsize(820, 560)
+        self.dock_window_restorer = MacDockWindowRestorer(self.root)
         install_dark_theme(self.root)
 
         self.folder_var = tk.StringVar()
@@ -1925,7 +2157,7 @@ class LauncherApp:
         instructions = (
             "1. 先选择要检查的子文件夹，例如：透明背景。\n"
             "2. 这个子文件夹里放预览图；它的上一层放同名原图。\n"
-            "3. 进入查图页后：空格下一张，R 矩形选区，F 自由选区，选区转纯白，E 橡皮擦，[/] 调笔刷，G 跳转输入框，O 打开当前图，P 用 PS 打开当前图，F5 刷新当前图，I 反相，W 转纯白，K 黑/近黑转白，B 加粗1px，2 加粗2px，N 加白边，Ctrl+Z/⌘Z/U 撤销，D 删除预览并把原图移到回退目录，X 仅删除预览图，Esc 退全屏，⌘Q 退出。\n"
+            "3. 进入查图页后：空格下一张，R 矩形选区，F 自由选区，选区转纯白，E 橡皮擦，C 吸管填色，[/] 调笔刷，G 跳转输入框，O 打开当前图，P 用 PS 打开当前图，F5 刷新当前图，I 反相，W/↑ 转纯白，K 黑/近黑转白，B 加粗1px，2 加粗2px，N 加白边，Ctrl+Z/⌘Z/U 撤销，D 删除预览并把原图移到回退目录，X/↓ 仅删除预览图，Esc 退全屏，⌘Q 退出。\n"
             "4. 图片修改会直接覆盖当前图，但本次运行内最近的修改可撤销。"
         )
         tk.Label(
