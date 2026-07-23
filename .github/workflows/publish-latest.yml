@@ -27,7 +27,7 @@ jobs:
           python -m pip install -r requirements.txt
       - name: 打包 app 和 DMG
         run: |
-          PYINSTALLER_CONFIG_DIR="$PWD/build/pyinstaller-cache" python -m PyInstaller --noconfirm --clean build/spec/抠图查图处理.spec
+          KOUTU_RELEASE_BUILD=1 PYINSTALLER_CONFIG_DIR="$PWD/build/pyinstaller-cache" python -m PyInstaller --noconfirm --clean build/spec/抠图查图处理.spec
           mkdir -p release
           hdiutil create -volname "抠图查图处理" -srcfolder "dist/抠图查图处理.app" -format UDZO -ov "release/batch-image-review-editor-macos-arm64.dmg"
           ditto -c -k --sequesterRsrc --keepParent "dist/抠图查图处理.app" "release/batch-image-review-editor-macos-arm64.app.zip"
@@ -55,7 +55,7 @@ jobs:
         shell: pwsh
         run: |
           $env:PYTHONUTF8 = "1"
-          python -m PyInstaller --noconfirm --clean --onefile --windowed --name "抠图查图处理-Windows-x64" --add-data "source-info.json;." "src/抠图查图处理_mac.py"
+          python -m PyInstaller --noconfirm --clean --onefile --windowed --name "抠图查图处理-Windows-x64" --add-data "release-metadata/source-info.json;." "src/抠图查图处理_mac.py"
           New-Item -ItemType Directory -Force release | Out-Null
           Move-Item "dist/抠图查图处理-Windows-x64.exe" "release/batch-image-review-editor-windows-x64.exe"
       - uses: actions/upload-artifact@v4
@@ -69,6 +69,15 @@ jobs:
     needs: [package-macos, package-windows]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 移动 latest tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -f latest "$GITHUB_SHA"
+          git push --force origin "refs/tags/latest"
       - uses: actions/download-artifact@v4
         with:
           path: release

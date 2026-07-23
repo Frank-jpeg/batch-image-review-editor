@@ -1,11 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(SPECPATH).resolve().parents[1]
 ENTRY_POINT = PROJECT_ROOT / 'src' / '抠图查图处理_mac.py'
-SOURCE_INFO = PROJECT_ROOT / 'source-info.json'
+SOURCE_INFO = (
+    PROJECT_ROOT / 'release-metadata' / 'source-info.json'
+    if os.environ.get('KOUTU_RELEASE_BUILD') == '1'
+    else PROJECT_ROOT / 'source-info.json'
+)
 ICON_PATH = PROJECT_ROOT / 'assets' / '查图.icns'
 
 a = Analysis(

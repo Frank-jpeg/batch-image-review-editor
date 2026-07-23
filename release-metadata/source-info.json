@@ -1,0 +1,8 @@
+{
+  "project_name": "抠图查图处理",
+  "source_repository": "https://github.com/Frank-jpeg/batch-image-review-editor",
+  "source_path": "https://github.com/Frank-jpeg/batch-image-review-editor",
+  "main_file": "src/抠图查图处理_mac.py",
+  "spec_file": "build/spec/抠图查图处理.spec",
+  "build_command": "GitHub Actions: .github/workflows/publish-latest.yml"
+}
