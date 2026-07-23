@@ -23,10 +23,29 @@ RETRY_FOLDER_NAME = "等待重新抠图"
 DONE_FOLDER_SUFFIX = "（已查图）"
 UI_FONT = "Microsoft YaHei UI" if sys.platform == "win32" else "PingFang SC"
 WINDOW_TITLE = "查图处理 v9"
-APP_SUPPORT_DIR = Path.home() / "Library" / "Application Support" / "抠图查图处理"
+
+
+def default_app_support_dir() -> Path:
+    if sys.platform == "win32":
+        app_data = os.environ.get("APPDATA")
+        if app_data:
+            return Path(app_data) / "抠图查图处理"
+        return Path.home() / "AppData" / "Roaming" / "抠图查图处理"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "抠图查图处理"
+    return Path.home() / ".config" / "抠图查图处理"
+
+
+APP_SUPPORT_DIR = default_app_support_dir()
 CONFIG_PATH = APP_SUPPORT_DIR / "config.json"
 PHOTOSHOP_BUNDLE_ID = "com.adobe.Photoshop"
 PHOTOSHOP_APP_PATH = Path("/Applications/Adobe Photoshop 2026/Adobe Photoshop 2026.app")
+WINDOWS_PHOTOSHOP_FOLDERS = (
+    "Adobe Photoshop 2026",
+    "Adobe Photoshop 2025",
+    "Adobe Photoshop 2024",
+    "Adobe Photoshop",
+)
 BG_COLOR_1 = (238, 238, 238, 255)
 BG_COLOR_2 = (208, 208, 208, 255)
 WHITE_BORDER_SIZE = 2
@@ -414,9 +433,28 @@ def command_error_text(result: subprocess.CompletedProcess[str]) -> str:
     return details or f"命令退出码：{result.returncode}"
 
 
+def find_windows_photoshop() -> Path | None:
+    for environment_key in ("ProgramW6432", "ProgramFiles"):
+        program_files = os.environ.get(environment_key)
+        if not program_files:
+            continue
+        for folder_name in WINDOWS_PHOTOSHOP_FOLDERS:
+            candidate = Path(program_files) / "Adobe" / folder_name / "Photoshop.exe"
+            if candidate.is_file():
+                return candidate
+    return None
+
+
 def open_with_photoshop(path: Path) -> None:
+    if sys.platform == "win32":
+        photoshop_path = find_windows_photoshop()
+        if photoshop_path is None:
+            raise OSError("未找到 Photoshop。请确认已安装 Adobe Photoshop 2024、2025 或 2026。")
+        subprocess.Popen([str(photoshop_path), str(path)])
+        return
+
     if sys.platform != "darwin":
-        raise OSError("PS 打开当前仅支持 macOS。")
+        raise OSError("当前系统不支持 Photoshop 快捷打开。")
 
     primary = subprocess.run(
         ["/usr/bin/open", "-b", PHOTOSHOP_BUNDLE_ID, str(path)],
