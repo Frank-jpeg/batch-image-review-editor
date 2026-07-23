@@ -29,14 +29,14 @@ jobs:
         run: |
           PYINSTALLER_CONFIG_DIR="$PWD/build/pyinstaller-cache" python -m PyInstaller --noconfirm --clean build/spec/抠图查图处理.spec
           mkdir -p release
-          hdiutil create -volname "抠图查图处理" -srcfolder "dist/抠图查图处理.app" -format UDZO -ov "release/抠图查图处理-macOS-arm64.dmg"
-          ditto -c -k --sequesterRsrc --keepParent "dist/抠图查图处理.app" "release/抠图查图处理-macOS-arm64.app.zip"
+          hdiutil create -volname "抠图查图处理" -srcfolder "dist/抠图查图处理.app" -format UDZO -ov "release/batch-image-review-editor-macos-arm64.dmg"
+          ditto -c -k --sequesterRsrc --keepParent "dist/抠图查图处理.app" "release/batch-image-review-editor-macos-arm64.app.zip"
       - uses: actions/upload-artifact@v4
         with:
           name: macos-package
           path: |
-            release/抠图查图处理-macOS-arm64.dmg
-            release/抠图查图处理-macOS-arm64.app.zip
+            release/batch-image-review-editor-macos-arm64.dmg
+            release/batch-image-review-editor-macos-arm64.app.zip
           if-no-files-found: error
 
   package-windows:
@@ -57,11 +57,11 @@ jobs:
           $env:PYTHONUTF8 = "1"
           python -m PyInstaller --noconfirm --clean --onefile --windowed --name "抠图查图处理-Windows-x64" --add-data "source-info.json;." "src/抠图查图处理_mac.py"
           New-Item -ItemType Directory -Force release | Out-Null
-          Move-Item "dist/抠图查图处理-Windows-x64.exe" "release/抠图查图处理-Windows-x64.exe"
+          Move-Item "dist/抠图查图处理-Windows-x64.exe" "release/batch-image-review-editor-windows-x64.exe"
       - uses: actions/upload-artifact@v4
         with:
           name: windows-package
-          path: release/抠图查图处理-Windows-x64.exe
+          path: release/batch-image-review-editor-windows-x64.exe
           if-no-files-found: error
 
   publish-release:
@@ -72,6 +72,12 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: release
+      - name: 清理旧版附件
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete-asset latest --yes -- -macOS-arm64.app.zip -macOS-arm64.dmg -Windows-x64.exe 2>/dev/null || true
+          gh release delete-asset latest --yes batch-image-review-editor-macos-arm64.app.zip batch-image-review-editor-macos-arm64.dmg batch-image-review-editor-windows-x64.exe 2>/dev/null || true
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: latest

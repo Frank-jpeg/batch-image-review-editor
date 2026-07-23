@@ -4,9 +4,9 @@
 
 ## 直接下载
 
-- [Mac（Apple Silicon，`.dmg`）](https://github.com/Frank-jpeg/batch-image-review-editor/releases/latest/download/抠图查图处理-macOS-arm64.dmg)
-- [Mac（Apple Silicon，解压即 app 的 `.zip`）](https://github.com/Frank-jpeg/batch-image-review-editor/releases/latest/download/抠图查图处理-macOS-arm64.app.zip)
-- [Windows 64 位（`.exe`）](https://github.com/Frank-jpeg/batch-image-review-editor/releases/latest/download/抠图查图处理-Windows-x64.exe)
+- [Mac（Apple Silicon，`.dmg`）](https://github.com/Frank-jpeg/batch-image-review-editor/releases/latest/download/batch-image-review-editor-macos-arm64.dmg)
+- [Mac（Apple Silicon，解压即 app 的 `.zip`）](https://github.com/Frank-jpeg/batch-image-review-editor/releases/latest/download/batch-image-review-editor-macos-arm64.app.zip)
+- [Windows 64 位（`.exe`）](https://github.com/Frank-jpeg/batch-image-review-editor/releases/latest/download/batch-image-review-editor-windows-x64.exe)
 
 每次推送到 `main`，GitHub Actions 会自动重新打包并更新上述“最新版”下载文件。
 
