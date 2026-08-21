@@ -724,6 +724,24 @@ def whiten_selection_preserve_alpha(path: Path, selection_mask: Image.Image) -> 
     fill_selection_preserve_alpha(path, selection_mask, (255, 255, 255))
 
 
+def delete_selection_pixels(path: Path, selection_mask: Image.Image) -> None:
+    with Image.open(path) as src:
+        save_format = detect_save_format(path, src.format)
+        mask = selection_mask.convert("L").resize(src.size, Image.Resampling.NEAREST)
+        mask = mask.point(lambda value: 255 if value > 0 else 0)
+
+        if save_format in ERASER_TRANSPARENT_FORMATS:
+            output = src.convert("RGBA")
+            alpha = ImageChops.subtract(output.getchannel("A"), mask)
+            output.putalpha(alpha)
+        else:
+            rgb = src.convert("RGB")
+            white = Image.new("RGB", rgb.size, (255, 255, 255))
+            output = Image.composite(white, rgb, mask)
+
+    save_image_atomic(output, path, save_format)
+
+
 def dilate_mask(mask: Image.Image, radius: int) -> Image.Image:
     radius = max(0, int(radius))
     if radius == 0:
@@ -1071,6 +1089,16 @@ class ReviewApp:
             command=self.whiten_selection_current,
             font=(UI_FONT, 11),
             bg="#2f7d64",
+            fg="white",
+        ).pack(side="left", padx=(0, 6))
+
+        tk.Button(
+            selection_controls,
+            text="删除选区像素",
+            width=13,
+            command=self.delete_selection_current,
+            font=(UI_FONT, 11),
+            bg="#9b3f52",
             fg="white",
         ).pack(side="left", padx=(0, 6))
 
@@ -1672,7 +1700,7 @@ class ReviewApp:
             return "break"
 
         self.selection_mask = mask
-        self.status_notice = "已创建选区，可点击“选区转纯白”或使用“吸管填色 C”。"
+        self.status_notice = "已创建选区，可点击“删除选区像素”“选区转纯白”或使用“吸管填色 C”。"
         self.refresh()
         return "break"
 
@@ -1829,7 +1857,7 @@ class ReviewApp:
         save_review_history(self.work_dir, self.retry_dir, self.index, current)
         if current is None:
             self.header_var.set("当前文件夹没有可处理图片了")
-            done_text = "已处理完成。按 Command+Q 退出，或点左上角红点关闭。"
+            done_text = "已处理完成。按 Command+Q 或点左上角红点返回首页。"
             if self.status_notice:
                 done_text = f"{self.status_notice}\n{done_text}"
                 self.status_notice = ""
@@ -1850,7 +1878,7 @@ class ReviewApp:
         self.update_work_dir_label()
         self.header_var.set(f"[{self.index + 1}/{len(self.images)}] {current.name}")
         base_text = (
-            f"回退目录：{self.retry_dir}    空格/回车：下一张    P：PS打开    F5：刷新    R/F：矩形/自由选区    E：橡皮擦    C：吸管填色    [/]：调笔刷    G：跳转    Ctrl+Z/⌘Z/U：撤销    Esc：退全屏    ⌘Q：退出"
+            f"回退目录：{self.retry_dir}    空格/回车：下一张    P：PS打开    F5：刷新    R/F：矩形/自由选区    E：橡皮擦    C：吸管填色    [/]：调笔刷    G：跳转    Ctrl+Z/⌘Z/U：撤销    Esc：退全屏    ⌘Q：返回首页"
         )
         if self.status_notice:
             self.status_var.set(f"{self.status_notice}\n{base_text}")
@@ -2007,6 +2035,24 @@ class ReviewApp:
             f"已把选区转纯白：{current.name}",
         )
 
+    def delete_selection_current(self) -> None:
+        current = self.current_image()
+        if current is None:
+            return
+        if self.selection_mask is None:
+            self.status_notice = "还没有选区。先点“矩形选区 R”或“自由选区 F”，再拖出区域。"
+            self.refresh()
+            return
+
+        mask = self.selection_mask.copy()
+        result = "透明" if current.suffix.lower() in {".png", ".webp"} else "白色"
+        self.apply_current_edit(
+            "删除选区像素",
+            "删除选区像素失败",
+            lambda path: delete_selection_pixels(path, mask),
+            f"已删除选区像素（变为{result}）：{current.name}",
+        )
+
     def black_to_white_current(self) -> None:
         current = self.current_image()
         if current is None:
@@ -2052,7 +2098,7 @@ class ReviewApp:
             self.root.state("normal")
         except tk.TclError:
             pass
-        self.status_notice = "已执行退出全屏。要关闭程序请按 Command+Q，或点左上角红点。"
+        self.status_notice = "已执行退出全屏。按 Command+Q 或点左上角红点可返回首页。"
         self.refresh()
 
     def quit_app(self, _event: tk.Event | None = None) -> str:
@@ -2195,7 +2241,7 @@ class LauncherApp:
         instructions = (
             "1. 先选择要检查的子文件夹，例如：透明背景。\n"
             "2. 这个子文件夹里放预览图；它的上一层放同名原图。\n"
-            "3. 进入查图页后：空格下一张，R 矩形选区，F 自由选区，选区转纯白，E 橡皮擦，C 吸管填色，[/] 调笔刷，G 跳转输入框，O 打开当前图，P 用 PS 打开当前图，F5 刷新当前图，I 反相，W/↑ 转纯白，K 黑/近黑转白，B 加粗1px，2 加粗2px，N 加白边，Ctrl+Z/⌘Z/U 撤销，D 删除预览并把原图移到回退目录，X/↓ 仅删除预览图，Esc 退全屏，⌘Q 退出。\n"
+            "3. 进入查图页后：空格下一张，R 矩形选区，F 自由选区，删除选区像素，选区转纯白，E 橡皮擦，C 吸管填色，[/] 调笔刷，G 跳转输入框，O 打开当前图，P 用 PS 打开当前图，F5 刷新当前图，I 反相，W/↑ 转纯白，K 黑/近黑转白，B 加粗1px，2 加粗2px，N 加白边，Ctrl+Z/⌘Z/U 撤销，D 删除预览并把原图移到回退目录，X/↓ 仅删除预览图，Esc 退全屏，⌘Q 返回首页。\n"
             "4. 图片修改会直接覆盖当前图，但本次运行内最近的修改可撤销。"
         )
         tk.Label(
@@ -2392,14 +2438,14 @@ def validate_folder(folder: Path) -> str | None:
 
 def main() -> int:
     initial_dir = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path.cwd().resolve()
-    start_paths = LauncherApp(initial_dir).run()
-    if start_paths is None:
-        return 0
+    while True:
+        start_paths = LauncherApp(initial_dir).run()
+        if start_paths is None:
+            return 0
 
-    start_dir, retry_dir = start_paths
-    app = ReviewApp(start_dir, retry_dir)
-    app.run()
-    return 0
+        start_dir, retry_dir = start_paths
+        ReviewApp(start_dir, retry_dir).run()
+        initial_dir = start_dir
 
 
 if __name__ == "__main__":
