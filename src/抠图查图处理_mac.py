@@ -594,6 +594,29 @@ def restore_bytes_atomic(path: Path, data: bytes) -> None:
     temp_path.replace(path)
 
 
+def parse_alpha_threshold(text: str) -> int:
+    text = text.strip()
+    if not text or not text.isascii() or not text.isdecimal():
+        raise ValueError("清除阈值请输入 0～254 的整数，不能填写 255。")
+    value = int(text)
+    if not 0 <= value <= 254:
+        raise ValueError("清除阈值请输入 0～254 的整数，不能填写 255。")
+    return value
+
+
+def clear_alpha_threshold(path: Path, threshold: int) -> None:
+    if type(threshold) is not int or not 0 <= threshold <= 254:
+        raise ValueError("清除阈值必须是 0～254 的整数。")
+    with Image.open(path) as src:
+        save_format = detect_save_format(path, src.format)
+        if save_format not in ERASER_TRANSPARENT_FORMATS:
+            raise ValueError("透明清除仅支持 PNG / WEBP，请先将图片转换为支持透明度的格式。")
+        output = src.convert("RGBA")
+        alpha = output.getchannel("A")
+        output.putalpha(alpha.point([0 if value <= threshold else value for value in range(256)]))
+    save_image_atomic(output, path, save_format)
+
+
 def invert_image_preserve_alpha(path: Path) -> None:
     with Image.open(path) as src:
         save_format = detect_save_format(path, src.format)
@@ -904,6 +927,7 @@ class ReviewApp:
         self.status_var = tk.StringVar()
         self.work_dir_var = tk.StringVar(value=self.processing_folder_text())
         self.jump_var = tk.StringVar()
+        self.alpha_threshold_var = tk.StringVar(value="128")
         self.eraser_button_var = tk.StringVar(value=self.eraser_button_text())
 
         header = tk.Label(
@@ -1199,6 +1223,27 @@ class ReviewApp:
             font=(UI_FONT, 9),
             fg="#555555",
         ).pack(fill="x", pady=(4, 0), anchor="e")
+
+        alpha_controls = tk.Frame(self.root, padx=10, pady=4)
+        alpha_controls.pack(fill="x")
+        tk.Label(alpha_controls, text="清除阈值：", font=(UI_FONT, 11)).pack(side="left")
+        self.alpha_threshold_entry = tk.Entry(
+            alpha_controls, textvariable=self.alpha_threshold_var, width=6,
+            font=(UI_FONT, 11),
+        )
+        self.alpha_threshold_entry.pack(side="left", padx=(0, 8))
+        # Keep Entry editing bindings, but exclude window-level image shortcuts.
+        self.alpha_threshold_entry.bindtags((str(self.alpha_threshold_entry), "Entry", "all"))
+        self.alpha_threshold_entry.bind("<Return>", self.clear_alpha_current)
+        self.alpha_threshold_entry.bind("<Escape>", lambda event: self.image_canvas.focus_set())
+        tk.Button(
+            alpha_controls, text="清除低透明度", command=self.clear_alpha_current,
+            font=(UI_FONT, 11),
+        ).pack(side="left", padx=(0, 10))
+        tk.Label(
+            alpha_controls, text="0～254；整图 Alpha ≤ 阈值的像素清为透明，可撤销",
+            font=(UI_FONT, 10), fg="#555555",
+        ).pack(side="left")
 
         status = tk.Label(
             self.root,
@@ -1993,6 +2038,26 @@ class ReviewApp:
         self.reset_selection_state()
         self.status_notice = f"已刷新当前图：{current.name}"
         self.refresh()
+
+    def clear_alpha_current(self, _event: tk.Event | None = None) -> str:
+        try:
+            threshold = parse_alpha_threshold(self.alpha_threshold_var.get())
+        except ValueError as exc:
+            messagebox.showerror("清除阈值无效", str(exc), parent=self.root)
+            self.alpha_threshold_entry.focus_set()
+            self.alpha_threshold_entry.selection_range(0, tk.END)
+            return "break"
+        current = self.current_image()
+        if current is None:
+            return "break"
+        self.apply_current_edit(
+            f"透明清除（阈值 {threshold}）",
+            "透明清除失败",
+            lambda path: clear_alpha_threshold(path, threshold),
+            f"已清除整图 Alpha ≤ {threshold} 的像素：{current.name}（可撤销）",
+        )
+        self.image_canvas.focus_set()
+        return "break"
 
     def invert_current(self) -> None:
         current = self.current_image()
